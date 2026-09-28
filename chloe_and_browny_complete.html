@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chloe and Browny</title>
+<style>
+:root{--bg:#0b1016;--panel:#121923;--line:#283545;--text:#edf4fa;--muted:#91a0b0;--blue:#55b9ff;--orange:#ff9b70;--good:#72e0a4;--danger:#ef6262}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% 0,#1a2a3a,#080c11 55%);color:var(--text);font-family:Inter,system-ui,sans-serif}
+header{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap}
+h1{margin:0;font-size:25px}.sub{color:var(--muted);font-size:12px;margin-top:3px}.controls{display:flex;gap:7px;flex-wrap:wrap}button,input{background:#192330;color:var(--text);border:1px solid #354456;border-radius:8px;padding:8px 11px}button{cursor:pointer}button:hover{background:#243243}
+.layout{display:grid;grid-template-columns:minmax(500px,1fr) 350px;gap:14px;max-width:1500px;margin:auto;padding:14px}.card{background:rgba(18,25,35,.94);border:1px solid var(--line);border-radius:12px;overflow:hidden}.worldHead{padding:10px 13px;display:flex;justify-content:space-between;border-bottom:1px solid var(--line);font-size:12px}.badge{padding:4px 8px;border-radius:99px;background:#202d3b;color:#bcd0e2}
+.world{padding:0;background:#17251c}.world canvas{display:block;width:100%;height:auto;background:#19301e}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:9px 12px;font-size:11px;color:#b8c6d2;background:#101720;border-top:1px solid var(--line)}
+section{padding:13px;border-bottom:1px solid var(--line)}section:last-child{border-bottom:0}h2{font-size:14px;margin:0 0 9px}.agent{padding:9px 0;border-top:1px solid #24303d}.agent:first-child{border-top:0}.row{display:flex;justify-content:space-between;gap:8px}.bar{height:6px;background:#26313e;border-radius:5px;overflow:hidden;margin:4px 0}.fill{height:100%}.small{font-size:11px;color:var(--muted)}.eventlog{height:150px;overflow:auto;font-size:10px;line-height:1.45}.eventlog div{padding:3px 0;border-bottom:1px solid #1d2732}.meter{display:grid;grid-template-columns:1fr 1fr;gap:5px}.metric{background:#18212c;padding:7px;border-radius:7px}.metric b{display:block;font-size:16px}.metric span{font-size:9px;color:var(--muted)}
+input[type=range]{padding:0;width:150px}.rangeRow{display:flex;align-items:center;justify-content:space-between;font-size:11px}
+@media(max-width:900px){.layout{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+<div><h1>Chloe and Browny</h1><div class="sub">An evolving artificial-life world • independent allies • learning from consequences</div></div>
+<div class="controls">
+<button id="pause">Pause</button><button id="step">Step</button><button id="reset">Reset</button>
+<label class="small">Speed <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+</div>
+</header>
+
+<div class="layout">
+<main class="card world">
+<div class="worldHead"><span id="status" class="badge">RUNNING</span><span>Tick <b id="tick">0</b> • World age <b id="age">0</b></span></div>
+<canvas id="world" width="960" height="600"></canvas>
+<div class="legend">🌲 Wood &nbsp; 🪨 Stone &nbsp; 🌿 Fiber &nbsp; 🍎 Food &nbsp; 🔴 Hazard &nbsp; ⛺ Shelter &nbsp; 🧱 Barrier &nbsp; 📦 Storage &nbsp; 🛤️ Path</div>
+</main>
+
+<aside class="card">
+<section><h2>World</h2><div class="meter">
+<div class="metric"><b id="resourceCount">0</b><span>RESOURCE NODES</span></div>
+<div class="metric"><b id="hazardCount">0</b><span>HAZARDS</span></div>
+<div class="metric"><b id="structureCount">0</b><span>STRUCTURES</span></div>
+<div class="metric"><b id="temperature">20°</b><span>TEMPERATURE</span></div>
+</div>
+<div class="rangeRow" style="margin-top:9px"><span>Difficulty</span><span id="difficultyValue">50</span></div>
+<input id="difficulty" type="range" min="1" max="100" value="50">
+</section>
+
+<section><h2>Agents</h2><div id="agents"></div></section>
+
+<section><h2>Construction Monitor</h2><div id="constructionMonitor" class="small"></div></section>
+
+<section><h2>World Hacks Monitor</h2><div id="hackMonitor" class="small"></div></section>
+
+<section><h2>Lifetime Behavior</h2><div id="lifeHistory" class="small"></div></section>
+
+<section><h2>Learning & Discovery</h2><div id="learning" class="small"></div></section>
+
+<section><h2>Event Log</h2><div id="events" class="eventlog"></div></section>
+</aside>
+</div>
+
+<script>
+"use strict";
+const canvas=document.getElementById("world"),ctx=canvas.getContext("2d");
+const W=canvas.width,H=canvas.height;
+const TAU=Math.PI*2;
+let paused=false, speed=1, tick=0, difficulty=50, last=performance.now(), acc=0;
+let resources=[],hazards=[],structures=[],events=[];
+let nextId=1;
+const types={
+ wood:{icon:"🌲",name:"Wood",color:"#8b6a42",value:4},
+ stone:{icon:"🪨",name:"Stone",color:"#a6afb8",value:3},
+ fiber:{icon:"🌿",name:"Fiber",color:"#62b86d",value:3},
+ food:{icon:"🍎",name:"Food",color:"#ed6f62",value:22}
+};
+const hacks={
+ edge:{name:"Edge Slip",found:false,uses:0,success:0},
+ loop:{name:"Resource Loop",found:false,uses:0,success:0},
+ lure:{name:"Hazard Lure",found:false,uses:0,success:0}
+};
+function rnd(a,b){return a+Math.random()*(b-a)}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function d(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function addEvent(s){events.unshift("T"+tick+" — "+s);events=events.slice(0,80)}
+function params(){
+ return {resources:Math.round(38-(difficulty*.18)),hazards:Math.round(4+difficulty*.12),hazardDamage:1+difficulty*.028,energyUse:.12+difficulty*.002}
+}
+function randomType(){let r=Math.random();return r<.3?"wood":r<.53?"stone":r<.77?"fiber":"food"}
+function makeAgent(name,x,y,color,traits){
+ return {name,x,y,color,energy:82,health:100,alive:true,age:0,action:"observing",target:null,
+  inventory:{wood:0,stone:0,fiber:0,food:0},memory:[],learning:{},experience:0,
+  traits,stats:{exploration:0,persistence:0,resourcefulness:0,innovation:0,construction:0,risk:0,conservation:0,social:0},
+  lastX:x,lastY:y,builds:0,collected:0,observed:0,discoveries:0,successfulExperiments:0,failedExperiments:0,
+lifetime:{birthTick:0,deathTick:null,events:[],snapshots:[]},
+deathReport:null,constructionHistory:[],hackHistory:[]}
+}
+let Chloe,Browny,agents=[];
+function reset(){
+ tick=0;nextId=1;events=[];resources=[];hazards=[];structures=[];
+ Object.keys(hacks).forEach(k=>Object.assign(hacks[k],{found:false,uses:0,success:0}));
+ Chloe=makeAgent("Chloe",145,300,"#55b9ff",{curiosity:.78,risk:.30,speed:2.25,perception:145});
+ Browny=makeAgent("Browny",815,310,"#ff9b70",{curiosity:.52,risk:.62,speed:2.45,perception:135});
+ agents=[Chloe,Browny];
+ agents.forEach(a=>{a.lifetime.birthTick=0;a.lifetime.events=["Entered the world."];});
+ const p=params();
+ for(let i=0;i<p.resources;i++)spawnResource();
+ for(let i=0;i<p.hazards;i++)spawnHazard();
+ addEvent("World initialized: resources, hazards, and two independent agents are present.");
+ update();
+}
+function spawnResource(){
+ let type=randomType(),margin=30;
+ resources.push({id:nextId++,x:rnd(margin,W-margin),y:rnd(margin,H-margin),material:type,amount:1+Math.floor(Math.random()*3),life:rnd(500,1000)});
+}
+function spawnHazard(){
+ hazards.push({id:nextId++,x:rnd(50,W-50),y:rnd(50,H-50),r:rnd(18,32),vx:rnd(-.65,.65),vy:rnd(-.65,.65),life:rnd(500,900)});
+}
+function nearestResource(a){
+ let best=null,bd=Infinity;
+ for(const r of resources){let q=d(a,r);if(q<a.traits.perception&&q<bd){best=r;bd=q}}
+ return best
+}
+function nearestHazard(a){
+ let best=null,bd=Infinity;
+ for(const h of hazards){let q=d(a,h);if(q<bd){best=h;bd=q}}
+ return best
+}
+function move(a,x,y,mult=1){
+ let dx=x-a.x,dy=y-a.y,len=Math.hypot(dx,dy)||1;
+ a.x=clamp(a.x+dx/len*a.traits.speed*mult,12,W-12);
+ a.y=clamp(a.y+dy/len*a.traits.speed*mult,12,H-12);
+ a.stats.exploration+=.01;
+}
+function remember(a,s){
+ a.memory.unshift({tick,text:s});a.memory=a.memory.slice(0,35);a.experience++;
+ if(a.lifetime){a.lifetime.events.unshift("T"+tick+" — "+s);a.lifetime.events=a.lifetime.events.slice(0,80);}
+}
+function collect(a,r){
+ if(!r)return;
+ if(d(a,r)>18){move(a,r.x,r.y);a.action="moving to "+types[r.material].name;return}
+ r.amount--;a.collected++;a.energy-=.25;
+ let gain=1;
+ // small chance to discover the resource-loop anomaly through repeated interaction
+ if(r.amount>=0&&Math.random()<.025+a.traits.curiosity*.02){gain++;hacks.loop.uses++;hacks.loop.success++;if(!hacks.loop.found){hacks.loop.found=true;a.discoveries++;addEvent(a.name+" discovered an unusual Resource Loop.");}}
+ a.inventory[r.material]+=gain;
+ a.action="collecting "+types[r.material].name;
+ remember(a,"Collected "+types[r.material].name);
+ if(r.amount<=0){resources.splice(resources.indexOf(r),1)}
+}
+function build(a){
+ if(a.inventory.wood>=3&&a.inventory.fiber>=2){
+  a.inventory.wood-=3;a.inventory.fiber-=2;
+  structures.push({type:"shelter",x:a.x,y:a.y,owner:a.name,life:9999});
+  a.builds++;a.stats.construction++;a.stats.innovation+=.5;
+  a.constructionHistory.push({tick,type:"Shelter",success:true,materials:"3 wood + 2 fiber"});
+  a.action="building shelter";remember(a,"Built shelter from 3 wood and 2 fiber");
+  addEvent(a.name+" built a shelter from gathered materials.");
+  return true;
+ }
+ return false;
+}
+function agentStep(a){
+ if(!a.alive)return;
+ a.age++;a.energy-=params().energyUse;a.stats.conservation+=a.energy<30?.04:0;
+ const hz=nearestHazard(a);
+ if(hz&&d(a,hz)<hz.r+35){
+  a.stats.risk+=a.traits.risk>.5?.04:.01;
+  if(a.traits.risk<.45){move(a,a.x+(a.x-hz.x),a.y+(a.y-hz.y),1.5);a.action="avoiding hazard";a.stats.persistence+=.02;return}
+  if(Math.random()<.012*a.traits.risk){
+ hacks.lure.uses++;
+ if(!hacks.lure.found){hacks.lure.found=true;a.discoveries++;remember(a,"Discovered Hazard Lure behavior");addEvent(a.name+" discovered Hazard Lure behavior.");}
+ hacks.lure.success++;
+ a.hackHistory.push({tick,hack:"Hazard Lure",success:true});
+}
+ }
+ const food=nearestResource(a);
+ if(a.inventory.wood>=3&&a.inventory.fiber>=2&&a.builds===0&&Math.random()<.9){build(a);return}
+ if(a.energy<30){
+  if(a.inventory.food>0){a.inventory.food--;a.energy=Math.min(100,a.energy+22);a.action="eating stored food";return}
+  if(food&&food.material==="food"){collect(a,food);return}
+  a.action="searching for food";a.stats.persistence+=.08;
+ }
+ if(food){collect(a,food);return}
+ // Exploration when nothing is nearby
+ const ang=Math.random()*TAU;move(a,a.x+Math.cos(ang)*100,a.y+Math.sin(ang)*100);
+ a.action="exploring";a.stats.exploration+=.08;
+ // Social observation
+ const other=a===Chloe?Browny:Chloe;
+ if(other.alive&&d(a,other)<a.traits.perception*.65){
+  a.observed++;a.stats.social+=.03;
+  if(other.builds>0&&a.builds===0&&Math.random()<a.traits.curiosity*.08){
+    remember(a,"Observed "+other.name+" building");
+    a.stats.innovation+=.08;
+    a.stats.resourcefulness+=.05;
+    addEvent(a.name+" learned from observing "+other.name+"'s construction.");
+  }
+}
+}
+function worldStep(){
+ tick++;
+ for(const r of resources)r.life--;
+ resources=resources.filter(r=>r.life>0);
+ for(const h of hazards){
+  h.x+=h.vx;h.y+=h.vy;
+  if(h.x<15||h.x>W-15)h.vx*=-1;
+  if(h.y<15||h.y>H-15)h.vy*=-1;
+  h.life--;
+ }
+ hazards=hazards.filter(h=>h.life>0);
+ const p=params();
+ if(resources.length<p.resources*.72&&Math.random()<.20)spawnResource();
+ if(hazards.length<p.hazards*.65&&Math.random()<.08)spawnHazard();
+ for(const a of agents){
+  const before=a.health;
+  agentStep(a);
+  for(const h of hazards)if(d(a,h)<h.r){
+   const shelter=structures.some(s=>s.type==="shelter"&&s.owner===a.name&&d(a,s)<65);
+   const dmg=shelter?p.hazardDamage*.35:p.hazardDamage;
+   a.health-=dmg;a.energy-=dmg*.35;
+  }
+  if(before>a.health)a.stats.risk+=.01;
+  if(a.energy<=0){a.energy=0;a.health-=.65}
+  if(a.health<=0&&a.alive){
+ a.alive=false;a.action="dead";a.lifetime.deathTick=tick;
+ a.deathReport={
+   age:a.age,builds:a.builds,collected:a.collected,discoveries:a.discoveries,
+   exploration:+a.stats.exploration.toFixed(1),innovation:+a.stats.innovation.toFixed(1),
+   construction:+a.stats.construction.toFixed(1),risk:+a.stats.risk.toFixed(1),
+   finalEnergy:+a.energy.toFixed(1),finalHealth:+a.health.toFixed(1)
+ };
+ a.lifetime.events.unshift("T"+tick+" — Died after "+a.age+" decision cycles.");
+ addEvent(a.name+" died after "+a.age+" decision cycles. Lifetime report recorded.");
+}
+ }
+ if(tick%25===0){
+  agents.forEach(a=>{
+    a.lifetime.snapshots.push({
+      tick,energy:+a.energy.toFixed(1),health:+a.health.toFixed(1),
+      builds:a.builds,collected:a.collected,discoveries:a.discoveries,
+      exploration:+a.stats.exploration.toFixed(1),innovation:+a.stats.innovation.toFixed(1)
+    });
+    a.lifetime.snapshots=a.lifetime.snapshots.slice(-60);
+  });
+  if(Math.random()<.18){spawnResource();addEvent("A new resource patch appeared.");}
+  if(Math.random()<.10){spawnHazard();addEvent("A new hazard entered the world.");}
+ }
+ update();
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ // reliable visible terrain
+ ctx.fillStyle="#1b3421";ctx.fillRect(0,0,W,H);
+ ctx.strokeStyle="rgba(180,220,180,.06)";ctx.lineWidth=1;
+ for(let x=0;x<W;x+=32){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+ for(let y=0;y<H;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}
+ // structures
+ for(const s of structures){
+  ctx.save();ctx.translate(s.x,s.y);
+  if(s.type==="shelter"){ctx.fillStyle="#a9783d";ctx.strokeStyle="#4e3218";ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(-24,12);ctx.lineTo(0,-18);ctx.lineTo(24,12);ctx.closePath();ctx.fill();ctx.stroke();ctx.fillStyle="#71451f";ctx.fillRect(-17,12,34,15)}
+  ctx.fillStyle="#fff";ctx.font="bold 10px system-ui";ctx.textAlign="center";ctx.fillText("⛺ "+s.owner,0,40);ctx.restore();
+ }
+ // hazards
+ for(const h of hazards){
+  let g=ctx.createRadialGradient(h.x,h.y,0,h.x,h.y,h.r*2.1);g.addColorStop(0,"rgba(239,80,80,.32)");g.addColorStop(1,"rgba(239,80,80,0)");
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(h.x,h.y,h.r*2.1,0,TAU);ctx.fill();
+  ctx.fillStyle="#c74650";ctx.beginPath();ctx.arc(h.x,h.y,h.r,0,TAU);ctx.fill();
+  ctx.strokeStyle="#ff9b9b";ctx.stroke();
+  ctx.fillStyle="#fff";ctx.font="14px system-ui";ctx.textAlign="center";ctx.fillText("!",h.x,h.y+5);
+ }
+ // resources
+ for(const r of resources){
+  const t=types[r.material];ctx.save();ctx.translate(r.x,r.y);
+  ctx.fillStyle=t.color;ctx.beginPath();ctx.arc(0,0,12,0,TAU);ctx.fill();
+  ctx.font="18px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(t.icon,0,1);
+  ctx.font="bold 9px monospace";ctx.fillStyle="#fff";ctx.fillText(r.amount,18,-10);ctx.restore();
+ }
+ // agents
+ for(const a of agents){
+  ctx.save();ctx.globalAlpha=a.alive?1:.25;
+  ctx.strokeStyle=a.color+"55";ctx.lineWidth=1;ctx.beginPath();ctx.arc(a.x,a.y,a.traits.perception,0,TAU);ctx.stroke();
+  ctx.fillStyle=a.color;ctx.beginPath();ctx.arc(a.x,a.y,12,0,TAU);ctx.fill();
+  ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();
+  ctx.fillStyle="#fff";ctx.font="bold 12px system-ui";ctx.textAlign="left";ctx.fillText(a.name,a.x+17,a.y-11);
+  ctx.font="10px system-ui";ctx.fillStyle="#e8f0f7";ctx.fillText(a.action,a.x+17,a.y+4);
+  ctx.fillStyle="#26323e";ctx.fillRect(a.x-20,a.y+17,40,4);ctx.fillStyle="#72e0a4";ctx.fillRect(a.x-20,a.y+17,40*clamp(a.energy/100,0,1),4);
+  ctx.fillStyle="#26323e";ctx.fillRect(a.x-20,a.y+23,40,3);ctx.fillStyle="#ef6262";ctx.fillRect(a.x-20,a.y+23,40*clamp(a.health/100,0,1),3);
+  ctx.restore();
+ }
+}
+function update(){
+ document.getElementById("tick").textContent=tick;
+ document.getElementById("age").textContent=tick;
+ document.getElementById("resourceCount").textContent=resources.length;
+ document.getElementById("hazardCount").textContent=hazards.length;
+ document.getElementById("structureCount").textContent=structures.length;
+ document.getElementById("temperature").textContent=(20+Math.sin(tick/45)*4+(Math.random()-.5)*.2).toFixed(1)+"°";
+ document.getElementById("difficultyValue").textContent=difficulty;
+ document.getElementById("agents").innerHTML=agents.map(a=>`
+ <div class="agent"><div class="row"><b>${a.name}</b><span>${a.alive?"🟢":"⚫"} ${a.action}</span></div>
+ <div class="bar"><div class="fill" style="width:${a.energy}%;background:#72e0a4"></div></div>
+ <div class="small">Energy ${a.energy.toFixed(0)} • Health ${a.health.toFixed(0)} • Age ${a.age}</div>
+ <div class="small">🪵${a.inventory.wood.toFixed(0)} 🪨${a.inventory.stone.toFixed(0)} 🌿${a.inventory.fiber.toFixed(0)} 🍎${a.inventory.food.toFixed(0)} • Builds ${a.builds}</div>
+ </div>`).join("");
+ document.getElementById("constructionMonitor").innerHTML=agents.map(a=>
+ `<div style="margin-bottom:7px"><b>${a.name}</b>: ${a.builds} shelters<br>
+ Materials: 🪵${a.inventory.wood.toFixed(0)} 🪨${a.inventory.stone.toFixed(0)} 🌿${a.inventory.fiber.toFixed(0)} 🍎${a.inventory.food.toFixed(0)}<br>
+ Construction tendency: ${a.stats.construction.toFixed(1)}<br>
+ ${a.constructionHistory.slice(-2).map(x=>"T"+x.tick+" — "+x.type+" built").join("<br>")||"No construction yet."}</div>`).join("");
+
+document.getElementById("hackMonitor").innerHTML=Object.values(hacks).map(h=>{
+ const rate=h.uses?Math.round(h.success/h.uses*100):0;
+ return `<div style="margin-bottom:6px"><b>${h.name}</b> — ${h.found?"DISCOVERED":"undiscovered"}<br>
+ Uses: ${h.uses} • Successes: ${h.success} • Success rate: ${rate}%</div>`;
+}).join("");
+
+document.getElementById("lifeHistory").innerHTML=agents.map(a=>{
+ const latest=a.lifetime.snapshots.slice(-1)[0];
+ return `<div style="margin-bottom:8px"><b>${a.name}</b><br>
+ Exploration ${a.stats.exploration.toFixed(0)} • Persistence ${a.stats.persistence.toFixed(1)} •
+ Innovation ${a.stats.innovation.toFixed(1)} • Resourcefulness ${a.stats.resourcefulness.toFixed(1)}<br>
+ Risk ${a.stats.risk.toFixed(1)} • Conservation ${a.stats.conservation.toFixed(1)} •
+ Social ${a.stats.social.toFixed(1)}<br>
+ Lifetime events: ${a.lifetime.events.length} • Snapshots: ${a.lifetime.snapshots.length}
+ ${a.deathReport?`<br><b>Death report:</b> age ${a.deathReport.age}, builds ${a.deathReport.builds}, discoveries ${a.deathReport.discoveries}`:""}</div>`;
+}).join("");
+
+document.getElementById("learning").innerHTML=`
+ Chloe: exploration ${Chloe.stats.exploration.toFixed(0)} • innovation ${Chloe.stats.innovation.toFixed(1)} • construction ${Chloe.stats.construction.toFixed(1)} • discoveries ${Chloe.discoveries}<br>
+ Browny: exploration ${Browny.stats.exploration.toFixed(0)} • innovation ${Browny.stats.innovation.toFixed(1)} • construction ${Browny.stats.construction.toFixed(1)} • discoveries ${Browny.discoveries}<br>
+ <b>Learning is experience-based:</b> observations, outcomes, resource use, construction, hazards and unusual interactions all enter lifetime history.
+`;
+document.getElementById("events").innerHTML=events.map(e=>"<div>"+e+"</div>").join("");
+ draw();
+}
+function frame(now){
+ const dt=now-last;last=now;
+ if(!paused){acc+=dt;const interval=260/speed;while(acc>=interval){worldStep();acc-=interval}}
+ requestAnimationFrame(frame);
+}
+document.getElementById("pause").onclick=()=>{paused=!paused;document.getElementById("pause").textContent=paused?"Resume":"Pause";document.getElementById("status").textContent=paused?"PAUSED":"RUNNING"};
+document.getElementById("step").onclick=()=>{if(paused)worldStep()};
+document.getElementById("reset").onclick=reset;
+document.getElementById("speed").onchange=e=>speed=+e.target.value;
+document.getElementById("difficulty").oninput=e=>{difficulty=+e.target.value;document.getElementById("difficultyValue").textContent=difficulty};
+reset();requestAnimationFrame(frame);
+window.chloeAndBrowny={agents,resources,hazards,structures,hacks};
+</script>
+</body>
+</html>
